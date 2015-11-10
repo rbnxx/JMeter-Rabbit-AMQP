@@ -7,6 +7,8 @@ import org.apache.jorphan.logging.LoggingManager;
 import org.apache.log.Logger;
 
 import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.Consumer;
+import com.rabbitmq.client.QueueingConsumer;
 
 
 /**
@@ -31,6 +33,18 @@ class ChannelCache {
 		}
 		
 	};
+
+	private final ThreadLocal<Map<String,QueueingConsumer>> consumerMap = new ThreadLocal<Map<String,QueueingConsumer>>(){
+		{
+			log.debug("initializing ChannelCache (global)");
+		}
+
+		@Override protected Map<String,QueueingConsumer> initialValue() {
+			log.debug("initializing ChannelCache HashMap for thread");
+			return new HashMap<String,QueueingConsumer>();
+		}
+		
+	};
 	
 	public static String genKey(String vhost, String host, String port, String user, String pass, String timeout, Boolean ssl) {
 		// generated as amqp uri (cf. https://www.rabbitmq.com/uri-query-parameters.html )
@@ -50,13 +64,20 @@ class ChannelCache {
 				.toString();
 	}
 	
-	public void set(String cnxString, Channel Channel) {
-		cnxChannelMap.get().put(cnxString, Channel);
+	public void set(String cnxString, Channel channel) {
+		cnxChannelMap.get().put(cnxString, channel);
 	}
 	
 	public Channel get(String cnxString) {
 		return cnxChannelMap.get().get(cnxString);
 	}
 	
+	public void setConsumer(String cnxString, QueueingConsumer consumer) {
+		consumerMap.get().put(cnxString, consumer);
+	}
+	
+	public QueueingConsumer getConsumer(String cnxString) {
+		return consumerMap.get().get(cnxString);
+	}
 };
 

@@ -2,6 +2,8 @@ package com.zeroclue.jmeter.protocol.amqp;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.security.*;
 
 import com.rabbitmq.client.*;
@@ -56,11 +58,12 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
     private static final String QUEUE_REDECLARE = "AMQPSampler.Redeclare";
     private static final String QUEUE_EXCLUSIVE = "AMQPSampler.QueueExclusive";
     private static final String QUEUE_AUTO_DELETE = "AMQPSampler.QueueAutoDelete";
-    private static final int DEFAULT_HEARTBEAT = 1;
+    private static final int DEFAULT_HEARTBEAT = 0;
 
     private transient ConnectionFactory factory;
     private transient Connection connection;
-    private transient static final ChannelCache channelCache = new ChannelCache();
+    protected transient static final ChannelCache channelCache = new ChannelCache();
+    protected static ExecutorService es = Executors.newFixedThreadPool(20);
 
     protected AMQPSampler(){
         factory = new ConnectionFactory();
@@ -74,6 +77,11 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
             log.warn("channel " + channel.getChannelNumber()
                     + " closed unexpectedly: ", channel.getCloseReason());
             channel = null; // so we re-open it below
+            if(shareChannel()) {
+        		String cnxkey = ChannelCache.genKey(getVirtualHost(), getHost(), getPort(), getUsername(), getPassword(), getTimeout(), connectionSSL());
+        		channelCache.set(cnxkey, null);
+        		channelCache.setConsumer(cnxkey, null);
+            }
         }
 
         if(channel == null) {
@@ -139,9 +147,18 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
         if(getMessageTTL() != null && !getMessageTTL().isEmpty())
             arguments.put("x-message-ttl", getMessageTTLAsInt());
 
+        boolean RVE_HACK = true;
         if(getMessageExpires() != null && !getMessageExpires().isEmpty())
-            arguments.put("x-expires", getMessageExpiresAsInt());
+        	if(RVE_HACK) {
+        		arguments.put("x-max-length", getMessageExpiresAsInt());
+        	} else {
+        		arguments.put("x-expires", getMessageExpiresAsInt());
+        	}
+        
+//        String X_MAX_LENGTH = "x-max-length";
+//        int DISPATCH_QUEUE_MAX_LENGTH = 100;
 
+//        arguments.put(X_MAX_LENGTH, DISPATCH_QUEUE_MAX_LENGTH);
         return arguments;
     }
 
@@ -464,7 +481,9 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
                 addresses[i] = new Address(hosts[i], getPortAsInt());
             }
             log.info("Using hosts: " + Arrays.toString(hosts) + " addresses: " + Arrays.toString(addresses));
-            connection = factory.newConnection(addresses);
+            
+            connection = factory.newConnection(es, addresses);
+            //connection = factory.newConnection(addresses);
          }
 
          Channel channel = connection.createChannel();

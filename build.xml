@@ -32,7 +32,23 @@
   <property name="ivy.install.version" value="2.3.0"/>
   <property name="ivy.jar.dir" value="${basedir}/ivy"/>
   <property name="ivy.jar.file" value="${ivy.jar.dir}/ivy.jar"/>
-  
+
+	  <target name="probe-proxy" >
+	    <condition property="proxy.enabled">
+	      <and>
+	        <isset property="proxy.host"/>
+	        <isreachable host="${proxy.host}"/>
+	      </and>
+	    </condition>
+	  </target>
+
+	  <target name="proxy"  if="proxy.enabled">
+	    <!-- <property name="proxy.port" value="80"/>
+	    <property name="proxy.user" value=""/>
+	    <property name="proxy.pass" value=""/> -->
+	    <setproxy proxyhost="${proxy.host}" proxyport="${proxy.port}"
+	      proxyuser="${proxy.user}" proxypassword="${proxy.pass}"/>
+	  </target> 
 
   <target name="compile"  depends="resolve-dependencies" description="Compile.">
       <echo>Compiling</echo>
@@ -63,7 +79,7 @@
     <taskdef resource="org/apache/ivy/ant/antlib.xml" uri="antlib:org.apache.ivy.ant" classpathref="ivy.lib.path"/>     
   </target>
   
-  <target name="download-ivy" unless="skip.ivy.download" description="Download Ivy">
+  <target name="download-ivy" unless="skip.ivy.download" description="Download Ivy" depends="proxy">
       <mkdir dir="${ivy.jar.dir}"/>
       <get src="http://repo1.maven.org/maven2/org/apache/ivy/ivy/${ivy.install.version}/ivy-${ivy.install.version}.jar" dest="${ivy.jar.file}" usetimestamp="true"/>
   </target>

@@ -53,17 +53,11 @@ public class AMQPConsumer extends AMQPSampler implements Interruptible, TestStat
         trace("AMQPConsumer.sample()");
 
         try {
-            initChannel();
+            // only do this once per thread. Otherwise it slows down the consumption by appx 50%
+        	if(consumer == null) {
+        		initChannel();
+        	}
 
-           // only do this once per thread. Otherwise it slows down the consumption by appx 50%
-            if (consumer == null) {
-                log.info("Creating consumer");
-                consumer = new QueueingConsumer(channel);
-            }
-            if (consumerTag == null) {
-                log.info("Starting basic consumer");
-                consumerTag = channel.basicConsume(getQueue(), autoAck(), consumer);
-            }
         } catch (Exception ex) {
             log.error("Failed to initialize channel", ex);
             result.setResponseMessage(ex.toString());
@@ -322,6 +316,33 @@ public class AMQPConsumer extends AMQPSampler implements Interruptible, TestStat
     protected boolean initChannel() throws IOException, NoSuchAlgorithmException, KeyManagementException {
         boolean ret = super.initChannel();
         channel.basicQos(getPrefetchCountAsInt());
+        
+        if(consumer == null) {
+
+        	// if channel sharing is enabled, look for Consumer in channelCache
+        	if(shareChannel()) {
+        		String cnxkey = ChannelCache.genKey(getVirtualHost(), getHost(), getPort(), getUsername(), getPassword(), getTimeout(), connectionSSL());
+        		consumer = channelCache.getConsumer(cnxkey);
+        		
+        		// channel isn't in cache (occurs for first AMQPSampler with this key)
+        		if(consumer == null) {
+                    log.info("Creating shared consumer");
+                    consumer = new QueueingConsumer(channel);
+            		channelCache.setConsumer(cnxkey, consumer);      
+                    log.info("Starting basic consumer");
+                    consumerTag = channel.basicConsume(getQueue(), autoAck(), consumer);
+        		} else {
+        			log.info("Recycling consumer for connection " + cnxkey);
+        			consumerTag=consumer.getConsumerTag();
+        		}
+        	} else { // create a new dedicated connection and channel for current AMQPSampler instance
+                log.info("Creating consumer");
+                consumer = new QueueingConsumer(channel);   	
+                log.info("Starting basic consumer");
+                consumerTag = channel.basicConsume(getQueue(), autoAck(), consumer);
+        	}
+        } 
+
         return ret;
     }
 }
