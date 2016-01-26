@@ -30,6 +30,9 @@ public abstract class AMQPSamplerGui extends AbstractSamplerGui {
     protected JLabeledTextField virtualHost = new JLabeledTextField("Virtual Host");
     protected JLabeledTextField messageTTL = new JLabeledTextField("Message TTL");
     protected JLabeledTextField messageExpires = new JLabeledTextField("Expires");
+    protected JLabeledTextField queueMaxLength = new JLabeledTextField("Max Length");
+    protected JLabeledTextField sharedConsumer = new JLabeledTextField("Shared Consumer");
+    protected JLabeledTextField poolSize = new JLabeledTextField("Consumer Threads");
     protected JLabeledChoice exchangeType = new JLabeledChoice("Exchange Type", new String[]{ "direct", "topic", "headers", "fanout"});
     private final JCheckBox exchangeDurable = new JCheckBox("Durable?", AMQPSampler.DEFAULT_EXCHANGE_DURABLE);
     private final JCheckBox queueDurable = new JCheckBox("Durable?", true);
@@ -40,10 +43,11 @@ public abstract class AMQPSamplerGui extends AbstractSamplerGui {
     protected JLabeledTextField host = new JLabeledTextField("Host");
     protected JLabeledTextField port = new JLabeledTextField("Port");
     protected JLabeledTextField timeout = new JLabeledTextField("Timeout");
+    protected JLabeledTextField heartbeat = new JLabeledTextField("Heartbeat");
+    protected JLabeledTextField sharedConnection = new JLabeledTextField("Shared Connection");
     protected JLabeledTextField username = new JLabeledTextField("Username");
     protected JLabeledTextField password = new JLabeledTextField("Password");
     private final JCheckBox SSL = new JCheckBox("SSL?", false);
-    private final JCheckBox shareChannel = new JCheckBox("Share?", false);
 
     private final JLabeledTextField iterations = new JLabeledTextField("Number of samples to Aggregate");
 
@@ -69,6 +73,10 @@ public abstract class AMQPSamplerGui extends AbstractSamplerGui {
         virtualHost.setText(sampler.getVirtualHost());
         messageTTL.setText(sampler.getMessageTTL());
         messageExpires.setText(sampler.getMessageExpires());
+        queueMaxLength.setText(sampler.getQueueMaxLength());
+        poolSize.setText(sampler.getPoolSize());
+        sharedConsumer.setText(sampler.getSharedConsumer());
+        sharedConnection.setText(sampler.getSharedConnection());
         queueDurable.setSelected(sampler.queueDurable());
         queueExclusive.setSelected(sampler.queueExclusive());
         queueAutoDelete.setSelected(sampler.queueAutoDelete());
@@ -81,8 +89,9 @@ public abstract class AMQPSamplerGui extends AbstractSamplerGui {
         port.setText(sampler.getPort());
         username.setText(sampler.getUsername());
         password.setText(sampler.getPassword());
+        heartbeat.setText(sampler.getHeartbeat());
+        sharedConnection.setText(sampler.getSharedConnection());
         SSL.setSelected(sampler.connectionSSL());
-        shareChannel.setSelected(sampler.shareChannel());
         log.info("AMQPSamplerGui.configure() called");
     }
 
@@ -99,6 +108,10 @@ public abstract class AMQPSamplerGui extends AbstractSamplerGui {
         virtualHost.setText("/");
         messageTTL.setText("");
         messageExpires.setText("");
+        queueMaxLength.setText("");
+        poolSize.setText("10");
+        sharedConnection.setText("");
+        sharedConsumer.setText("");
         exchangeType.setText("direct");
         queueDurable.setSelected(true);
         queueExclusive.setSelected(false);
@@ -113,8 +126,9 @@ public abstract class AMQPSamplerGui extends AbstractSamplerGui {
         port.setText(AMQPSampler.DEFAULT_PORT_STRING);
         username.setText("guest");
         password.setText("guest");
+        heartbeat.setText(AMQPSampler.DEFAULT_HEARTBEAT_STRING);
+        sharedConnection.setText("");
         SSL.setSelected(false);
-        shareChannel.setSelected(false);
     }
 
     /**
@@ -134,11 +148,15 @@ public abstract class AMQPSamplerGui extends AbstractSamplerGui {
         sampler.setVirtualHost(virtualHost.getText());
         sampler.setMessageTTL(messageTTL.getText());
         sampler.setMessageExpires(messageExpires.getText());
+        sampler.setQueueMaxLength(queueMaxLength.getText());
         sampler.setExchangeType(exchangeType.getText());
         sampler.setQueueDurable(queueDurable.isSelected());
         sampler.setQueueExclusive(queueExclusive.isSelected());
         sampler.setQueueAutoDelete(queueAutoDelete.isSelected());
         sampler.setQueueRedeclare(queueRedeclare.isSelected());
+        sampler.setPoolSize(poolSize.getText());
+        sampler.setSharedConnection(sharedConnection.getText());
+        sampler.setSharedConsumer(sharedConsumer.getText());
 
         sampler.setTimeout(timeout.getText());
         sampler.setIterations(iterations.getText());
@@ -148,7 +166,6 @@ public abstract class AMQPSamplerGui extends AbstractSamplerGui {
         sampler.setUsername(username.getText());
         sampler.setPassword(password.getText());
         sampler.setConnectionSSL(SSL.isSelected());
-        sampler.setShareChannel(shareChannel.isSelected());
         log.info("AMQPSamplerGui.modifyTestElement() called, set user/pass to " + username.getText() + "/" + password.getText() + " on sampler " + sampler);
     }
 
@@ -223,6 +240,18 @@ public abstract class AMQPSamplerGui extends AbstractSamplerGui {
         gridBagConstraints.gridy = 3;
         queueSettings.add(messageExpires, gridBagConstraints);
 
+        gridBagConstraints.gridx = 0;
+        gridBagConstraints.gridy = 4;
+        queueSettings.add(queueMaxLength, gridBagConstraints);
+
+        gridBagConstraints.gridx = 0;
+        gridBagConstraints.gridy = 5;
+        queueSettings.add(poolSize, gridBagConstraints);
+
+        gridBagConstraints.gridx = 0;
+        gridBagConstraints.gridy = 6;
+        queueSettings.add(sharedConsumer, gridBagConstraints);
+
         gridBagConstraints.gridx = 1;
         gridBagConstraints.gridy = 1;
         queueSettings.add(queueDurable, gridBagConstraints);
@@ -267,10 +296,6 @@ public abstract class AMQPSamplerGui extends AbstractSamplerGui {
         gridBagConstraints.gridx = 1;
         gridBagConstraints.gridy = 2;
         serverSettings.add(SSL, gridBagConstraints);
-
-        gridBagConstraints.gridx = 1;
-        gridBagConstraints.gridy = 3;
-        serverSettings.add(shareChannel, gridBagConstraints);
         
         gridBagConstraints.gridx = 0;
         gridBagConstraints.gridy = 3;
@@ -283,6 +308,14 @@ public abstract class AMQPSamplerGui extends AbstractSamplerGui {
         gridBagConstraints.gridx = 0;
         gridBagConstraints.gridy = 5;
         serverSettings.add(timeout, gridBagConstraints);
+
+        gridBagConstraints.gridx = 0;
+        gridBagConstraints.gridy = 6;
+        serverSettings.add(heartbeat, gridBagConstraints);
+
+        gridBagConstraints.gridx = 0;
+        gridBagConstraints.gridy = 7;
+        serverSettings.add(sharedConnection, gridBagConstraints);
 
         gridBagConstraintsCommon.gridx = 1;
         gridBagConstraintsCommon.gridy = 0;

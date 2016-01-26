@@ -61,6 +61,7 @@ public class AMQPPublisher extends AMQPSampler implements Interruptible {
     @Override
     public SampleResult sample(Entry e) {
         SampleResult result = new SampleResult();
+        channel = this.getChannel();
         result.setSampleLabel(getName());
         result.setSuccessful(false);
         result.setResponseCode("500");
@@ -113,6 +114,7 @@ public class AMQPPublisher extends AMQPSampler implements Interruptible {
             result.setSuccessful(true);
         } catch (Exception ex) {
             log.debug(ex.getMessage(), ex);
+            log.info(ex.getMessage(), ex);
             result.setResponseCode("000");
             result.setResponseMessage(ex.toString());
         }
@@ -230,16 +232,6 @@ public class AMQPPublisher extends AMQPSampler implements Interruptible {
     public boolean interrupt() {
         cleanup();
         return true;
-    }
-
-    @Override
-    protected Channel getChannel() {
-        return channel;
-    }
-
-    @Override
-    protected void setChannel(Channel channel) {
-        this.channel = channel;
     }
 
     protected AMQP.BasicProperties getProperties() {

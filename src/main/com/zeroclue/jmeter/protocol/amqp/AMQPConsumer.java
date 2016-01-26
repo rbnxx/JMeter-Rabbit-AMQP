@@ -32,12 +32,12 @@ public class AMQPConsumer extends AMQPSampler implements Interruptible, TestStat
     private static final String AUTO_ACK = "AMQPConsumer.AutoAck";
     private static final String RECEIVE_TIMEOUT = "AMQPConsumer.ReceiveTimeout";
 
-    private transient Channel channel;
-    private transient QueueingConsumer consumer;
+    private transient QueueingConsumer consumer = null;
     private transient String consumerTag;
 
     public AMQPConsumer(){
         super();
+        log.warn("amqpconsumer constructor called");
     }
 
     /**
@@ -45,13 +45,14 @@ public class AMQPConsumer extends AMQPSampler implements Interruptible, TestStat
      */
     @Override
     public SampleResult sample(Entry entry) {
+    	//log.warn("amqpconsumer sample called... Queue: "+this.getQueue()+"   SharedConsumer: "+this.getSharedConsumer()+ "   SharedCnx: "+this.getSharedConnection());
         SampleResult result = new SampleResult();
         result.setSampleLabel(getName());
         result.setSuccessful(false);
         result.setResponseCode("500");
 
         trace("AMQPConsumer.sample()");
-
+        QueueingConsumer consumer = this.getConsumer(); 
         try {
             // only do this once per thread. Otherwise it slows down the consumption by appx 50%
         	if(consumer == null) {
@@ -95,7 +96,7 @@ public class AMQPConsumer extends AMQPSampler implements Interruptible, TestStat
                 }
 
                 if(!autoAck())
-                    channel.basicAck(delivery.getEnvelope().getDeliveryTag(), false);
+                    this.getChannel().basicAck(delivery.getEnvelope().getDeliveryTag(), false);
             }
 
             result.setResponseData("OK", null);
@@ -140,15 +141,6 @@ public class AMQPConsumer extends AMQPSampler implements Interruptible, TestStat
         return result;
     }
 
-    @Override
-    protected Channel getChannel() {
-        return channel;
-    }
-
-    @Override
-    protected void setChannel(Channel channel) {
-        this.channel = channel;
-    }
 
     /**
      * @return the whether or not to purge the queue
@@ -260,7 +252,7 @@ public class AMQPConsumer extends AMQPSampler implements Interruptible, TestStat
         if(purgeQueue()){
             log.info("Purging queue " + getQueue());
             try {
-                channel.queuePurge(getQueue());
+                this.getChannel().queuePurge(getQueue());
             } catch (IOException e) {
                 log.error("Failed to purge queue " + getQueue(), e);
             }
@@ -283,7 +275,7 @@ public class AMQPConsumer extends AMQPSampler implements Interruptible, TestStat
     }
 
     public void cleanup() {
-
+    	Channel channel = this.getChannel();
         try {
         	// TODO: Refactor closing mechanism (cleanup AMQPConsumers before closing connection)
             if (consumerTag != null) {
@@ -313,36 +305,53 @@ public class AMQPConsumer extends AMQPSampler implements Interruptible, TestStat
         log.debug(tn + " " + tl + " " + s + " " + th);
     }
 
+    protected QueueingConsumer getConsumer() {
+    	// if channel sharing is enabled, look for Consumer in channelCache
+    	if(getSharedConnection() != null) {
+    		String csmrKey = getCsmrKey();
+    		return channelCache.getConsumer(csmrKey);
+    	} else {
+    		return this.consumer;
+    	}
+    }
+
+    protected void setConsumer(QueueingConsumer consumer) {
+    	// if channel sharing is enabled, look for Consumer in channelCache
+    	if(getSharedConnection() != null) {
+    		channelCache.setConsumer(getCsmrKey(), consumer);    
+    	} else {
+    		this.consumer = consumer; 
+    	}
+    }
+
+	private String getCsmrKey() {
+		return ChannelCache.genKey(getVirtualHost(), getHost(), getPort(), getUsername(), getPassword(), getTimeout(), connectionSSL(), getSharedConsumer());
+	}
+
     protected boolean initChannel() throws IOException, NoSuchAlgorithmException, KeyManagementException {
+    	log.warn("amqpconsumer initChannel called");
         boolean ret = super.initChannel();
         channel.basicQos(getPrefetchCountAsInt());
+        consumer = this.getConsumer();
         
         if(consumer == null) {
-
-        	// if channel sharing is enabled, look for Consumer in channelCache
-        	if(shareChannel()) {
-        		String cnxkey = ChannelCache.genKey(getVirtualHost(), getHost(), getPort(), getUsername(), getPassword(), getTimeout(), connectionSSL());
-        		consumer = channelCache.getConsumer(cnxkey);
-        		
+            log.info("Creating consumer");
+            consumer = new QueueingConsumer(channel);
+        	if(getSharedConnection() != null) {
         		// channel isn't in cache (occurs for first AMQPSampler with this key)
-        		if(consumer == null) {
-                    log.info("Creating shared consumer");
-                    consumer = new QueueingConsumer(channel);
-            		channelCache.setConsumer(cnxkey, consumer);      
-                    log.info("Starting basic consumer");
-                    consumerTag = channel.basicConsume(getQueue(), autoAck(), consumer);
-        		} else {
-        			log.info("Recycling consumer for connection " + cnxkey);
-        			consumerTag=consumer.getConsumerTag();
-        		}
-        	} else { // create a new dedicated connection and channel for current AMQPSampler instance
-                log.info("Creating consumer");
-                consumer = new QueueingConsumer(channel);   	
+       		  	this.setConsumer(consumer);
                 log.info("Starting basic consumer");
                 consumerTag = channel.basicConsume(getQueue(), autoAck(), consumer);
-        	}
-        } 
-
+    		} else {
+    			log.info("Recycling consumer for connection " + getCsmrKey());
+    			consumerTag=consumer.getConsumerTag();
+    		}
+    	} else { // create a new dedicated connection and channel for current AMQPSampler instance
+            log.info("Creating consumer");
+            consumer = new QueueingConsumer(channel);   	
+            log.info("Starting basic consumer");
+            consumerTag = channel.basicConsume(getQueue(), autoAck(), consumer);
+    	}
         return ret;
     }
 }

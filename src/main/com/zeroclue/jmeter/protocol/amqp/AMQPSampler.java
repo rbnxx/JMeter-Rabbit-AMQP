@@ -32,6 +32,9 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
 
     public static final int DEFAULT_ITERATIONS = 1;
     public static final String DEFAULT_ITERATIONS_STRING = Integer.toString(DEFAULT_ITERATIONS);
+    
+    public static final int DEFAULT_HEARTBEAT = 0;
+    public static final String DEFAULT_HEARTBEAT_STRING = Integer.toString(DEFAULT_HEARTBEAT);
 
     private static final Logger log = LoggingManager.getLoggerForClass();
 
@@ -47,65 +50,55 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
     protected static final String HOST = "AMQPSampler.Host";
     protected static final String PORT = "AMQPSampler.Port";
     protected static final String SSL = "AMQPSampler.SSL";
-    protected static final String SHARE_CHANNEL = "AMQPSampler.ShareChannel";
     protected static final String USERNAME = "AMQPSampler.Username";
     protected static final String PASSWORD = "AMQPSampler.Password";
     private static final String TIMEOUT = "AMQPSampler.Timeout";
+    private static final String HEARTBEAT = "AMQPSampler.Heartbeat";
+    private static final String SHARED_CONNECTION = "AMQPSampler.SharedConnection";
     private static final String ITERATIONS = "AMQPSampler.Iterations";
     private static final String MESSAGE_TTL = "AMQPSampler.MessageTTL";
     private static final String MESSAGE_EXPIRES = "AMQPSampler.MessageExpires";
+    private static final String QUEUE_MAXLENGTH = "AMQPSampler.QueueMaxLength";
     private static final String QUEUE_DURABLE = "AMQPSampler.QueueDurable";
     private static final String QUEUE_REDECLARE = "AMQPSampler.Redeclare";
     private static final String QUEUE_EXCLUSIVE = "AMQPSampler.QueueExclusive";
     private static final String QUEUE_AUTO_DELETE = "AMQPSampler.QueueAutoDelete";
-    private static final int DEFAULT_HEARTBEAT = 0;
+    private static final String POOL_SIZE = "AMQPSampler.PoolSize";
+    private static final String SHARED_CONSUMER = "AMQPSampler.SharedConsumer";
+
 
     private transient ConnectionFactory factory;
     private transient Connection connection;
+    protected transient Channel channel = null;
     protected transient static final ChannelCache channelCache = new ChannelCache();
-    protected static ExecutorService es = Executors.newFixedThreadPool(20);
+    protected static ExecutorService consumerPool;
 
     protected AMQPSampler(){
         factory = new ConnectionFactory();
-        factory.setRequestedHeartbeat(DEFAULT_HEARTBEAT);
+        log.warn("amqpsampler constructor called");
     }
 
     protected boolean initChannel() throws IOException, NoSuchAlgorithmException, KeyManagementException {
-        Channel channel = getChannel();
+    	channel = this.getChannel();
 
         if(channel != null && !channel.isOpen()){
             log.warn("channel " + channel.getChannelNumber()
                     + " closed unexpectedly: ", channel.getCloseReason());
             channel = null; // so we re-open it below
-            if(shareChannel()) {
-        		String cnxkey = ChannelCache.genKey(getVirtualHost(), getHost(), getPort(), getUsername(), getPassword(), getTimeout(), connectionSSL());
-        		channelCache.set(cnxkey, null);
-        		channelCache.setConsumer(cnxkey, null);
+            // remove shared connection from cache
+            if(getSharedConnection() != null) {
+        		channelCache.set(getCnxKey(), null);
+        		// TODO: check that consumer cleaning occur in AMQPConsumer
+        		// channelCache.setConsumer(getC, null);
             }
         }
 
         if(channel == null) {
-
-        	// if channel sharing is enabled, look for channel in channelCache
-        	if(shareChannel()) {
-        		String cnxkey = ChannelCache.genKey(getVirtualHost(), getHost(), getPort(), getUsername(), getPassword(), getTimeout(), connectionSSL());
-        		channel = channelCache.get(cnxkey);
-        		
-        		// channel isn't in cache (occurs for first AMQPSampler with this key)
-        		if(channel == null) {
-            		channel = createChannel();
-            		log.info("Caching new channel for connection " + cnxkey);
-            		channelCache.set(cnxkey, channel);
-            		setChannel(channel);
-            		
-        		} else {
-        			log.info("Recycling channel for connection " + cnxkey);
-        			setChannel(channel);
-        		}
-        	} else { // create a new dedicated connection and channel for current AMQPSampler instance
-        		channel = createChannel();
-        		setChannel(channel);        		
-        	}
+        	log.info("channel not found, creating it");
+        	channel = createChannel();
+        	log.info("caching newly created channel");
+	       	setChannel(channel);
+	    	
 
             //TODO: Break out queue binding
             boolean queueConfigured = (getQueue() != null && !getQueue().isEmpty());
@@ -136,10 +129,13 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
                 +"\n\t routing key: " + getRoutingKey()
                 +"\n\t arguments: " + getQueueArguments()
                 );
-
         }
         return true;
     }
+
+	private String getCnxKey() {
+		return ChannelCache.genKey(getVirtualHost(), getHost(), getPort(), getUsername(), getPassword(), getTimeout(), connectionSSL(), getSharedConnection());
+	}
 
     private Map<String, Object> getQueueArguments() {
         Map<String, Object> arguments = new HashMap<String, Object>();
@@ -147,23 +143,58 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
         if(getMessageTTL() != null && !getMessageTTL().isEmpty())
             arguments.put("x-message-ttl", getMessageTTLAsInt());
 
-        boolean RVE_HACK = true;
         if(getMessageExpires() != null && !getMessageExpires().isEmpty())
-        	if(RVE_HACK) {
-        		arguments.put("x-max-length", getMessageExpiresAsInt());
-        	} else {
-        		arguments.put("x-expires", getMessageExpiresAsInt());
-        	}
-        
-//        String X_MAX_LENGTH = "x-max-length";
-//        int DISPATCH_QUEUE_MAX_LENGTH = 100;
+        	arguments.put("x-expires", getMessageExpiresAsInt());
 
-//        arguments.put(X_MAX_LENGTH, DISPATCH_QUEUE_MAX_LENGTH);
+        if(getQueueMaxLength() != null && !getQueueMaxLength().isEmpty())
+    		arguments.put("x-max-length", getQueueMaxLengthAsInt());
+        
         return arguments;
     }
 
-    protected abstract Channel getChannel();
-    protected abstract void setChannel(Channel channel);
+    protected Channel getChannel() {
+    	
+    	// if channel sharing is enabled, look for channel in channelCache
+    	if(getSharedConnection() != null) {
+    		String cnxkey = getCnxKey();
+    		//log.info("looking up channel for key: "+cnxkey+"(get returned: "+channelCache.get(cnxkey)+")");
+    		return channelCache.get(cnxkey);
+    	} else { // return channel for current AMQPSampler instance
+    		return channel;
+    	}
+    }
+    
+    protected void setChannel(Channel channel) {
+       	if(getSharedConnection() != null) {
+       		String cnxkey = getCnxKey();
+       		log.info("Caching new channel for connection " + cnxkey);
+       		channelCache.set(cnxkey, channel);
+       	} else {
+       		this.channel = channel;
+       	}
+    }
+    
+    protected Connection getConnection() {
+    	
+    	// if channel sharing is enabled, look for channel in channelCache
+    	if(getSharedConnection() != null) {
+    		String cnxkey = getCnxKey();
+    		log.info("looking up connection for key: "+cnxkey+"(get returned: "+channelCache.getConnection(cnxkey)+")");
+    		return channelCache.getConnection(cnxkey);
+    	} else { // return channel for current AMQPSampler instance
+    		return connection;
+    	}
+    }
+    
+    protected void setConnection(Connection connection) {
+       	if(getSharedConnection() != null) {
+       		String cnxkey = getCnxKey();
+       		log.info("Caching new connection for key " + cnxkey);
+       		channelCache.setConnection(cnxkey, connection);
+       	} else {
+       		this.connection = connection;
+       	}
+    }
 
     /**
      * @return a string for the sampleResult Title
@@ -243,6 +274,21 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
         setProperty(QUEUE, name);
     }
 
+    public String getSharedConnection() {
+        return getPropertyAsString(SHARED_CONNECTION);
+    }
+
+    public void setSharedConnection(String name) {
+        setProperty(SHARED_CONNECTION, name);
+    }
+
+    public String getSharedConsumer() {
+        return getPropertyAsString(SHARED_CONSUMER);
+    }
+
+    public void setSharedConsumer(String name) {
+        setProperty(SHARED_CONSUMER, name);
+    }
 
     public String getRoutingKey() {
         return getPropertyAsString(ROUTING_KEY);
@@ -277,6 +323,29 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
         return getPropertyAsInt(MESSAGE_TTL);
     }
 
+    public String getPoolSize() {
+        return getPropertyAsString(POOL_SIZE);
+    }
+
+    public void setPoolSize(String name) {
+        setProperty(POOL_SIZE, name);
+    }
+
+    protected Integer getPoolSizeAsInt() {
+        return getPropertyAsInt(POOL_SIZE);
+    }
+
+    public String getHeartbeat() {
+        return getPropertyAsString(HEARTBEAT);
+    }
+
+    public void setHeartbeat(String name) {
+        setProperty(HEARTBEAT, name);
+    }
+
+    protected Integer getHeartbeatAsInt() {
+        return getPropertyAsInt(HEARTBEAT);
+    }
 
     public String getMessageExpires() {
         return getPropertyAsString(MESSAGE_EXPIRES);
@@ -294,6 +363,22 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
     }
 
 
+    public String getQueueMaxLength() {
+        return getPropertyAsString(QUEUE_MAXLENGTH);
+    }
+
+    public void setQueueMaxLength(String length) {
+        setProperty(QUEUE_MAXLENGTH, length);
+    }
+
+    protected Integer getQueueMaxLengthAsInt() {
+        if (getPropertyAsInt(QUEUE_MAXLENGTH) < 1) {
+            return null;
+        }
+        return getPropertyAsInt(QUEUE_MAXLENGTH);
+    }
+
+    
     public String getHost() {
         return getPropertyAsString(HOST);
     }
@@ -328,18 +413,6 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
 
     public boolean connectionSSL() {
         return getPropertyAsBoolean(SSL);
-    }
-
-    public void setShareChannel(String content) {
-        setProperty(SHARE_CHANNEL, content);
-    }
-
-    public void setShareChannel(Boolean value) {
-        setProperty(SHARE_CHANNEL, value.toString());
-    }
-
-    public boolean shareChannel() {
-        return getPropertyAsBoolean(SHARE_CHANNEL);
     }
 
     public String getUsername() {
@@ -454,8 +527,13 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
 
     protected Channel createChannel() throws IOException, NoSuchAlgorithmException, KeyManagementException {
         log.info("Creating channel " + getVirtualHost()+":"+getPortAsInt());
+        connection = this.getConnection();
+
+        if(getPoolSizeAsInt() != 0 && consumerPool == null)
+        	consumerPool = Executors.newFixedThreadPool(getPoolSizeAsInt());
 
          if (connection == null || !connection.isOpen()) {
+        	factory.setRequestedHeartbeat(getHeartbeatAsInt());
             factory.setConnectionTimeout(getTimeoutAsInt());
             factory.setVirtualHost(getVirtualHost());
             factory.setUsername(getUsername());
@@ -482,9 +560,13 @@ public abstract class AMQPSampler extends AbstractSampler implements ThreadListe
             }
             log.info("Using hosts: " + Arrays.toString(hosts) + " addresses: " + Arrays.toString(addresses));
             
-            connection = factory.newConnection(es, addresses);
-            //connection = factory.newConnection(addresses);
+            if( consumerPool == null) {
+            	connection = factory.newConnection(addresses);
+            } else {
+            	connection = factory.newConnection(consumerPool, addresses);
+            }
          }
+         this.setConnection(connection);
 
          Channel channel = connection.createChannel();
          if(!channel.isOpen()){
